@@ -5,6 +5,7 @@ import (
 	"io/ioutil"
 	"testing"
 
+	"github.com/paulmach/orb/geojson"
 	"github.com/paulmach/osm"
 )
 
@@ -66,6 +67,18 @@ func BenchmarkConvert_NoIDsMetaMembership(b *testing.B) {
 	b.ResetTimer()
 	for n := 0; n < b.N; n++ {
 		Convert(o, NoID(true), NoMeta(true), NoRelationMembership(true))
+	}
+}
+
+func BenchmarkVisitFeatues_NoIDsMetaMembership(b *testing.B) {
+	o := parseFile(b, "testdata/benchmark.osm")
+
+	b.ReportAllocs()
+	b.ResetTimer()
+	for n := 0; n < b.N; n++ {
+		VisitFeatures(o, func(f *geojson.Feature) error {
+			return nil
+		}, NoID(true), NoMeta(true), NoRelationMembership(true))
 	}
 }
 

@@ -9,7 +9,7 @@ import (
 	"github.com/paulmach/osm/internal/mputil"
 )
 
-func (ctx *context) buildPolygon(relation *osm.Relation) *geojson.Feature {
+func (ctx *context) buildPolygon(f *geojson.Feature, relation *osm.Relation) *geojson.Feature {
 	tags := relation.Tags.Map()
 
 	var outer []mputil.Segment
@@ -153,7 +153,7 @@ func (ctx *context) buildPolygon(relation *osm.Relation) *geojson.Feature {
 	}
 
 	featureID := tagObject.FeatureID()
-	f := geojson.NewFeature(geometry)
+	f.Geometry = geometry
 
 	if !ctx.noID {
 		f.ID = fmt.Sprintf("%s/%d", featureID.Type(), featureID.Ref())

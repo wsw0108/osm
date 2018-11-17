@@ -33,6 +33,111 @@ type relationSummary struct {
 // Convert takes a set of osm elements and converts them
 // to a geojson feature collection.
 func Convert(o *osm.OSM, opts ...Option) (*geojson.FeatureCollection, error) {
+	ctx, err := prepareContext(o, opts...)
+	if err != nil {
+		return nil, err
+	}
+
+	features := make([]*geojson.Feature, 0, len(ctx.osm.Relations)+len(ctx.osm.Ways))
+	err = ctx.visit(true, func(f *geojson.Feature) error {
+		// features = append(features, cloneFeature(f))
+		features = append(features, f)
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	fc := geojson.NewFeatureCollection()
+	fc.Features = features
+
+	return fc, nil
+}
+
+// VisitFeatures will visit all the features in the osm data starting with
+// Relations, Ways and then Nodes. The feature object will be reused to save
+// memory allocations.
+func VisitFeatures(o *osm.OSM, f func(*geojson.Feature) error, opts ...Option) error {
+	ctx, err := prepareContext(o, opts...)
+	if err != nil {
+		return err
+	}
+
+	return ctx.visit(false, f)
+}
+
+// The create parameter is to allow for "create new" or "feature reset". This was faster
+// than reset and clone for some reason.
+func (ctx *context) visit(create bool, callback func(*geojson.Feature) error) error {
+	feature := geojson.NewFeature(nil)
+
+	// relations
+	for _, relation := range ctx.osm.Relations {
+		tt := relation.Tags.Find("type")
+		if tt == "route" {
+			feature = resetFeature(create, feature)
+			f := ctx.buildRouteLineString(feature, relation)
+			if f != nil {
+				if err := callback(f); err != nil {
+					return err
+				}
+			}
+		} else if tt == "multipolygon" || tt == "boundary" {
+			feature = resetFeature(create, feature)
+			f := ctx.buildPolygon(feature, relation)
+			if f != nil {
+				if err := callback(f); err != nil {
+					return err
+				}
+			}
+		}
+
+		// NOTE: we skip/ignore relation that aren't multipolygons, boundaries or routes
+	}
+
+	for _, way := range ctx.osm.Ways {
+		// should skip only skippable relation members
+		if _, skip := ctx.skippable[way.ID]; skip {
+			continue
+		}
+
+		feature = resetFeature(create, feature)
+		f := ctx.wayToFeature(feature, way)
+		if f != nil {
+			if err := callback(f); err != nil {
+				return err
+			}
+		}
+	}
+
+	for _, node := range ctx.osm.Nodes {
+		// should NOT skip if any are true:
+		//   not a member of a way.
+		//   a member of a relation member
+		//   has any interesting tags
+		// should skip if all are true:
+		//   a member of a way.
+		//   not a member of a relation member
+		//   does not have any interesting tags
+		if _, ok := ctx.wayMember[node.ID]; ok &&
+			len(ctx.relationMember[node.FeatureID()]) == 0 &&
+			!hasInterestingTags(node.Tags, nil) {
+			continue
+		}
+
+		feature = resetFeature(create, feature)
+		f := ctx.nodeToFeature(feature, node)
+		if f != nil {
+			if err := callback(f); err != nil {
+				return err
+			}
+		}
+	}
+
+	return nil
+}
+
+func prepareContext(o *osm.OSM, opts ...Option) (*context, error) {
 	ctx := &context{
 		osm:       o,
 		skippable: make(map[osm.WayID]struct{}),
@@ -89,63 +194,7 @@ func Convert(o *osm.OSM, opts ...Option) (*geojson.FeatureCollection, error) {
 		}
 	}
 
-	features := make([]*geojson.Feature, 0, len(ctx.osm.Relations)+len(ctx.osm.Ways))
-
-	// relations
-	for _, relation := range ctx.osm.Relations {
-		tt := relation.Tags.Find("type")
-		if tt == "route" {
-			feature := ctx.buildRouteLineString(relation)
-			if feature != nil {
-				features = append(features, feature)
-			}
-		} else if tt == "multipolygon" || tt == "boundary" {
-			feature := ctx.buildPolygon(relation)
-			if feature != nil {
-				features = append(features, feature)
-			}
-		}
-
-		// NOTE: we skip/ignore relation that aren't multipolygons, boundaries or routes
-	}
-
-	for _, way := range ctx.osm.Ways {
-		// should skip only skippable relation members
-		if _, skip := ctx.skippable[way.ID]; skip {
-			continue
-		}
-
-		feature := ctx.wayToFeature(way)
-		if feature != nil {
-			features = append(features, feature)
-		}
-	}
-
-	for _, node := range ctx.osm.Nodes {
-		// should NOT skip if any are true:
-		//   not a member of a way.
-		//   a member of a relation member
-		//   has any interesting tags
-		// should skip if all are true:
-		//   a member of a way.
-		//   not a member of a relation member
-		//   does not have any interesting tags
-		if _, ok := ctx.wayMember[node.ID]; ok &&
-			len(ctx.relationMember[node.FeatureID()]) == 0 &&
-			!hasInterestingTags(node.Tags, nil) {
-			continue
-		}
-
-		feature := ctx.nodeToFeature(node)
-		if feature != nil {
-			features = append(features, feature)
-		}
-	}
-
-	fc := geojson.NewFeatureCollection()
-	fc.Features = features
-
-	return fc, nil
+	return ctx, nil
 }
 
 // getNode will find the node in the set.
@@ -162,13 +211,13 @@ func (ctx *context) getNode(id osm.NodeID) *osm.Node {
 	return ctx.nodeMap[id]
 }
 
-func (ctx *context) nodeToFeature(n *osm.Node) *geojson.Feature {
+func (ctx *context) nodeToFeature(f *geojson.Feature, n *osm.Node) *geojson.Feature {
 	// our definition of empty, ill defined
 	if n.Lon == 0 && n.Lat == 0 && n.Version == 0 {
 		return nil
 	}
 
-	f := geojson.NewFeature(orb.Point{n.Lon, n.Lat})
+	f.Geometry = orb.Point{n.Lon, n.Lat}
 
 	if !ctx.noID {
 		f.ID = fmt.Sprintf("node/%d", n.ID)
@@ -198,20 +247,19 @@ func (ctx *context) wayToLineString(w *osm.Way) (orb.LineString, bool) {
 	return ls, tainted
 }
 
-func (ctx *context) wayToFeature(w *osm.Way) *geojson.Feature {
+func (ctx *context) wayToFeature(f *geojson.Feature, w *osm.Way) *geojson.Feature {
 	ls, tainted := ctx.wayToLineString(w)
 	if len(ls) <= 1 {
 		// one node ways are ignored.
 		return nil
 	}
 
-	var f *geojson.Feature
 	if w.Polygon() {
 		p := orb.Polygon{toRing(ls)}
 		reorient(p)
-		f = geojson.NewFeature(p)
+		f.Geometry = p
 	} else {
-		f = geojson.NewFeature(ls)
+		f.Geometry = ls
 	}
 
 	if !ctx.noID {
@@ -230,7 +278,7 @@ func (ctx *context) wayToFeature(w *osm.Way) *geojson.Feature {
 	return f
 }
 
-func (ctx *context) buildRouteLineString(relation *osm.Relation) *geojson.Feature {
+func (ctx *context) buildRouteLineString(f *geojson.Feature, relation *osm.Relation) *geojson.Feature {
 	lines := make([]mputil.Segment, 0, 10)
 	tainted := false
 	for _, m := range relation.Members {
@@ -282,7 +330,7 @@ func (ctx *context) buildRouteLineString(relation *osm.Relation) *geojson.Featur
 		geometry = mls
 	}
 
-	f := geojson.NewFeature(geometry)
+	f.Geometry = geometry
 	if !ctx.noID {
 		f.ID = fmt.Sprintf("relation/%d", relation.ID)
 	}
@@ -413,4 +461,21 @@ func toRing(ls orb.LineString) orb.Ring {
 	}
 
 	return orb.Ring(ls)
+}
+
+func resetFeature(create bool, f *geojson.Feature) *geojson.Feature {
+	if create {
+		return geojson.NewFeature(nil)
+	}
+
+	f.ID = nil
+	f.Type = "Feature"
+	f.Geometry = nil
+
+	// f.Properties = make(map[string]interface{})
+	for k := range f.Properties {
+		delete(f.Properties, k)
+	}
+
+	return f
 }

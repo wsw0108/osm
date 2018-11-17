@@ -550,7 +550,7 @@ func TestBuildRouteLineString(t *testing.T) {
 		},
 	}
 
-	feature := ctx.buildRouteLineString(relation)
+	feature := ctx.buildRouteLineString(geojson.NewFeature(nil), relation)
 	if !orb.Equal(feature.Geometry, orb.LineString{{2, 1}, {4, 3}}) {
 		t.Errorf("incorrect geometry: %v", feature.Geometry)
 	}
@@ -563,7 +563,7 @@ func TestBuildRouteLineString(t *testing.T) {
 		},
 	}
 
-	feature = ctx.buildRouteLineString(relation)
+	feature = ctx.buildRouteLineString(geojson.NewFeature(nil), relation)
 	if feature != nil {
 		t.Errorf("should not return feature if no ways present: %v", feature)
 	}
