@@ -6,6 +6,7 @@ import (
 	"github.com/paulmach/orb"
 	"github.com/paulmach/orb/geojson"
 	"github.com/paulmach/osm"
+	"github.com/paulmach/osm/filter"
 	"github.com/paulmach/osm/internal/mputil"
 )
 
@@ -14,6 +15,7 @@ type context struct {
 	noMeta                 bool
 	noRelationMembership   bool
 	includeInvalidPolygons bool
+	filter                 filter.Filter
 
 	osm       *osm.OSM
 	skippable map[osm.WayID]struct{}
@@ -37,6 +39,7 @@ func Convert(o *osm.OSM, opts ...Option) (*geojson.FeatureCollection, error) {
 		osm:       o,
 		skippable: make(map[osm.WayID]struct{}),
 	}
+	ctx.filter = filter.NewPassFilter()
 
 	for _, opt := range opts {
 		if err := opt(ctx); err != nil {
@@ -94,6 +97,11 @@ func Convert(o *osm.OSM, opts ...Option) (*geojson.FeatureCollection, error) {
 	// relations
 	for _, relation := range ctx.osm.Relations {
 		tt := relation.Tags.Find("type")
+		if tt == "route" || tt == "multipolygon" || tt == "boundary" {
+			if !ctx.filter.Apply(relation) {
+				continue
+			}
+		}
 		if tt == "route" {
 			feature := ctx.buildRouteLineString(relation)
 			if feature != nil {
@@ -115,6 +123,10 @@ func Convert(o *osm.OSM, opts ...Option) (*geojson.FeatureCollection, error) {
 			continue
 		}
 
+		if !ctx.filter.Apply(way) {
+			continue
+		}
+
 		feature := ctx.wayToFeature(way)
 		if feature != nil {
 			features = append(features, feature)
@@ -133,6 +145,10 @@ func Convert(o *osm.OSM, opts ...Option) (*geojson.FeatureCollection, error) {
 		if _, ok := ctx.wayMember[node.ID]; ok &&
 			len(ctx.relationMember[node.FeatureID()]) == 0 &&
 			!hasInterestingTags(node.Tags, nil) {
+			continue
+		}
+
+		if !ctx.filter.Apply(node) {
 			continue
 		}
 

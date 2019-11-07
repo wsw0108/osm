@@ -1,5 +1,7 @@
 package osmgeojson
 
+import "github.com/paulmach/osm/filter"
+
 // An Option is a setting for creating the geojson.
 type Option func(*context) error
 
@@ -35,6 +37,13 @@ func NoRelationMembership(yes bool) Option {
 func IncludeInvalidPolygons(yes bool) Option {
 	return func(ctx *context) error {
 		ctx.includeInvalidPolygons = yes
+		return nil
+	}
+}
+
+func Filter(filter filter.Filter) Option {
+	return func(ctx *context) error {
+		ctx.filter = filter
 		return nil
 	}
 }
