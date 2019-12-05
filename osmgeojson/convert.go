@@ -39,7 +39,7 @@ func Convert(o *osm.OSM, opts ...Option) (*geojson.FeatureCollection, error) {
 		osm:       o,
 		skippable: make(map[osm.WayID]struct{}),
 	}
-	ctx.filter = filter.NewPassFilter()
+	ctx.filter = filter.AllFilter()
 
 	for _, opt := range opts {
 		if err := opt(ctx); err != nil {
